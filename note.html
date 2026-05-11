@@ -99,6 +99,20 @@
   </div>
 </div>
 
+<!-- ═══ ДЕСКТОП CALENDAR POPUP ═══ -->
+<div id="deskCalPopup" class="desk-cal-popup">
+  <div class="desk-cal-header">
+    <button class="desk-cal-nav" id="deskCalPrev">&#8249;</button>
+    <span id="deskCalTitle"></span>
+    <button class="desk-cal-nav" id="deskCalNext">&#8250;</button>
+  </div>
+  <button class="desk-cal-today-btn" id="deskCalTodayBtn">Сьогодні</button>
+  <div class="desk-cal-weekdays">
+    <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Нд</span>
+  </div>
+  <div class="desk-cal-grid" id="deskCalGrid"></div>
+</div>
+
 <!-- ═══ МОДАЛКА ВИБОРУ ДНЯ (мобільна) ═══ -->
 <div id="dayPickerOverlay" class="day-picker-overlay" onclick="if(event.target===this)closeDayPicker()">
   <div class="day-picker-modal">
@@ -205,6 +219,17 @@ function getDays(year, month) {
 // ═══════════════════════════════════════════════════════════
 const selectedSlots = new Map();
 
+// ── Кеш бронювань ──
+let cachedBookings = [];
+async function loadBookings() {
+  try {
+    const r = await fetch('/api/bookings');
+    cachedBookings = await r.json();
+  } catch(e) { cachedBookings = []; }
+}
+// Завантажуємо одразу
+loadBookings();
+
 function slotKey(dateStr, room, pairIdx) {
   return `${dateStr}|${room}|${pairIdx}`;
 }
@@ -247,14 +272,25 @@ function buildMonthBlock(year, month) {
   days.forEach(day => {
     const h = document.createElement('div');
     h.className = 'header' + (day.dow === 5 ? ' week-end' : '');
+    // Підсвічуємо сьогоднішній день
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    if (day.dateStr === todayStr) h.classList.add('header-today');
+    if (day.dateStr === (window._dpSelectedDate || '') && day.dateStr !== todayStr) h.classList.add('header-selected');
     h.innerText = day.label;
+    h.style.cursor = 'pointer';
+    h.addEventListener('click', () => openDesktopDayPicker(year, month, h));
     block.appendChild(h);
   });
 
   ROOMS.forEach(room => {
     days.forEach(day => {
+      const today2 = new Date();
+      const todayStr2 = `${today2.getFullYear()}-${String(today2.getMonth()+1).padStart(2,'0')}-${String(today2.getDate()).padStart(2,'0')}`;
       const cell = document.createElement('div');
       cell.className = 'cell' + (day.dow === 5 ? ' week-end' : '');
+      if (day.dateStr === todayStr2) cell.classList.add('cell-today');
+      if (day.dateStr === (window._dpSelectedDate || '') && day.dateStr !== todayStr2) cell.classList.add('cell-selected');
 
       const lbl = document.createElement('div');
       lbl.className = 'room-label';
@@ -271,8 +307,9 @@ function buildMonthBlock(year, month) {
       slots.className = 'slots';
       for (let i = 0; i < 4; i++) {
         const btn = document.createElement('button');
-        btn.innerText = i + 1;
         const key = slotKey(day.dateStr, room, i);
+
+        btn.innerText = i + 1;
         if (selectedSlots.has(key)) btn.classList.add('active');
         btn.onclick = () => toggleSlot(btn, day.dateStr, room, i);
         slots.appendChild(btn);
@@ -335,9 +372,9 @@ function buildMobileMonth(year, month) {
 
       for (let i = 0; i < 4; i++) {
         const btn = document.createElement('button');
+        const key = slotKey(day.dateStr, room, i);
         btn.className = 'mob-pair-btn';
         btn.textContent = PAIR_NAMES[i];
-        const key = slotKey(day.dateStr, room, i);
         if (selectedSlots.has(key)) btn.classList.add('active');
         btn.onclick = () => toggleSlot(btn, day.dateStr, room, i);
         grid.appendChild(btn);
@@ -413,6 +450,23 @@ function initGrid() {
   if (block) wrapper.appendChild(block);
   wrapper.scrollLeft = 0;
   updateTitle();
+
+  // На мобільному — скролимо на сьогоднішній день
+  if (isMobile()) {
+    const today = new Date();
+    if (today.getFullYear() === y && today.getMonth() === m) {
+      setTimeout(() => {
+        const todayStr = `${y}-${String(m+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+        const cols = wrapper.querySelectorAll('.mob-col');
+        for (const col of cols) {
+          if (col.querySelector(`[data-date="${todayStr}"]`)) {
+            wrapper.scrollTo({ left: col.offsetLeft, behavior: 'instant' });
+            break;
+          }
+        }
+      }, 50);
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -543,6 +597,8 @@ document.getElementById('confirmBtn').addEventListener('click', async () => {
   }
 
   const merged = [...existing, ...newBookings];
+  // Оновлюємо кеш
+  cachedBookings = merged;
 
   try {
     await fetch('/api/bookings', {
@@ -561,8 +617,8 @@ document.getElementById('confirmBtn').addEventListener('click', async () => {
   // Скидаємо вибір
   selectedSlots.clear();
   updateConfirmBtn();
-  // Знімаємо .active з усіх кнопок
-  document.querySelectorAll('.slots button.active').forEach(b => b.classList.remove('active'));
+  // Знімаємо .active з усіх кнопок (десктоп + мобільний)
+  document.querySelectorAll('.slots button.active, .mob-pair-btn.active').forEach(b => b.classList.remove('active'));
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -776,6 +832,167 @@ document.getElementById('themeToggle').addEventListener('click', () => {
 });
 
 // ═══════════════════════════════════════════════════════════
+//  ДЕСКТОП CALENDAR POPUP
+// ═══════════════════════════════════════════════════════════
+let _deskCalYear, _deskCalMonth, _deskCalAnchor;
+
+function openDesktopDayPicker(year, month, anchorEl) {
+  _deskCalYear   = year;
+  _deskCalMonth  = month;
+  _deskCalAnchor = anchorEl;
+
+  renderDeskCal(year, month);
+
+  const popup = document.getElementById('deskCalPopup');
+  popup.style.display = 'block';
+
+  // Позиціонуємо fixed відносно viewport
+  const rect = anchorEl.getBoundingClientRect();
+  const popupW = 290;
+  const popupH = 320;
+
+  let left = rect.left + rect.width / 2 - popupW / 2;
+  let top  = rect.bottom + 6;
+
+  // Не виходимо за межі екрану
+  if (left + popupW > window.innerWidth - 8) left = window.innerWidth - popupW - 8;
+  if (left < 8) left = 8;
+  if (top + popupH > window.innerHeight - 8) top = rect.top - popupH - 6;
+
+  popup.style.left = left + 'px';
+  popup.style.top  = top  + 'px';
+
+  requestAnimationFrame(() => popup.classList.add('desk-cal-open'));
+
+  setTimeout(() => {
+    document.addEventListener('click', closeDeskCalOutside);
+  }, 0);
+}
+
+function closeDeskCalOutside(e) {
+  const popup = document.getElementById('deskCalPopup');
+  if (!popup.contains(e.target) && !e.target.classList.contains('header')) {
+    closeDeskCal();
+  }
+}
+
+function closeDeskCal() {
+  const popup = document.getElementById('deskCalPopup');
+  popup.classList.remove('desk-cal-open');
+  setTimeout(() => { popup.style.display = 'none'; }, 200);
+  document.removeEventListener('click', closeDeskCalOutside);
+}
+
+function renderDeskCal(year, month) {
+  const grid  = document.getElementById('deskCalGrid');
+  const title = document.getElementById('deskCalTitle');
+  title.textContent = MONTH_NAMES[month] + ' ' + year;
+  grid.innerHTML = '';
+
+  const firstDay    = new Date(year, month, 1).getDay();
+  const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today       = new Date();
+
+  for (let i = 0; i < startOffset; i++) {
+    const e = document.createElement('div');
+    e.className = 'desk-cal-cell desk-cal-empty';
+    grid.appendChild(e);
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const cell = document.createElement('button');
+    cell.className = 'desk-cal-cell';
+    cell.textContent = day;
+
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const dow = new Date(year, month, day).getDay();
+    if (dow === 0 || dow === 6) cell.classList.add('desk-cal-weekend');
+
+    const isToday    = year === today.getFullYear() && month === today.getMonth() && day === today.getDate();
+    const isSelected = dateStr === (window._dpSelectedDate || '');
+
+    if (isToday && isSelected) {
+      cell.classList.add('desk-cal-today', 'desk-cal-selected');
+    } else if (isToday) {
+      cell.classList.add('desk-cal-today');
+    } else if (isSelected) {
+      cell.classList.add('desk-cal-selected');
+    }
+
+    cell.addEventListener('click', ev => {
+      ev.stopPropagation();
+      window._dpSelectedDate = dateStr;
+      closeDeskCal();
+
+      const wrapper = document.getElementById('wrapper');
+      const targetBlock = wrapper.querySelector(`.month-block[data-year="${year}"][data-month="${month}"]`);
+      if (targetBlock) {
+        const colCount = new Date(year, month + 1, 0).getDate();
+        const colW = targetBlock.offsetWidth / colCount;
+        const scrollTo = targetBlock.offsetLeft + (day - 1) * colW - wrapper.clientWidth / 2 + colW / 2;
+
+        // Оновлюємо підсвічування — знімаємо старе і перебудовуємо блок
+        const newBlock = buildMonthBlock(year, month);
+        if (newBlock) {
+          targetBlock.replaceWith(newBlock);
+          const newTarget = wrapper.querySelector(`.month-block[data-year="${year}"][data-month="${month}"]`);
+          if (newTarget) {
+            const colW2 = newTarget.offsetWidth / colCount;
+            const scrollTo2 = newTarget.offsetLeft + (day - 1) * colW2 - wrapper.clientWidth / 2 + colW2 / 2;
+            wrapper.scrollTo({ left: Math.max(0, scrollTo2), behavior: 'smooth' });
+          }
+        } else {
+          wrapper.scrollTo({ left: Math.max(0, scrollTo), behavior: 'smooth' });
+        }
+      } else {
+        navigateToMonth(year, month, dateStr);
+      }
+    });
+    grid.appendChild(cell);
+  }
+
+  // Навігація стрілками
+  document.getElementById('deskCalPrev').onclick = ev => {
+    ev.stopPropagation();
+    let m = _deskCalMonth - 1, y = _deskCalYear;
+    if (m < 0) { m = 11; y--; }
+    _deskCalYear = y; _deskCalMonth = m;
+    renderDeskCal(y, m);
+  };
+  document.getElementById('deskCalNext').onclick = ev => {
+    ev.stopPropagation();
+    let m = _deskCalMonth + 1, y = _deskCalYear;
+    if (m > 11) { m = 0; y++; }
+    _deskCalYear = y; _deskCalMonth = m;
+    renderDeskCal(y, m);
+  };
+
+  // Кнопка "Сьогодні"
+  document.getElementById('deskCalTodayBtn').onclick = ev => {
+    ev.stopPropagation();
+    const t = new Date();
+    const dateStr = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+    // Очищаємо обраний день — сьогодні вже підсвічений як header-today
+    window._dpSelectedDate = null;
+    closeDeskCal();
+
+    // Перебудовуємо поточний місяць щоб прибрати header-selected
+    const wrapper = document.getElementById('wrapper');
+    const todayBlock = wrapper.querySelector(`.month-block[data-year="${t.getFullYear()}"][data-month="${t.getMonth()}"]`);
+    if (todayBlock) {
+      const newBlock = buildMonthBlock(t.getFullYear(), t.getMonth());
+      if (newBlock) todayBlock.replaceWith(newBlock);
+    }
+    // Також прибираємо з інших місяців
+    wrapper.querySelectorAll('.header-selected').forEach(h => h.classList.remove('header-selected'));
+    wrapper.querySelectorAll('.cell-selected').forEach(c => c.classList.remove('cell-selected'));
+
+    scrollToDate(dateStr);
+  };
+}
+
+// ═══════════════════════════════════════════════════════════
 //  DAY PICKER (мобільний)
 // ═══════════════════════════════════════════════════════════
 const MONTH_NAMES_UA = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
@@ -949,27 +1166,43 @@ function closeDayPicker() {
 
 function scrollToDate(dateStr) {
   const wrapper = document.getElementById('wrapper');
-  const cols = wrapper.querySelectorAll('.mob-col');
-  for (const col of cols) {
-    const dateEl = col.querySelector('[data-date="' + dateStr + '"]');
-    if (dateEl) {
-      wrapper.scrollTo({ left: col.offsetLeft, behavior: 'smooth' });
-      // Підсвічуємо обраний день в day picker
-      document.querySelectorAll('.dp-cell.dp-selected').forEach(c => c.classList.remove('dp-selected'));
-      const allCells = document.querySelectorAll('.dp-month-block .dp-cell');
-      allCells.forEach(c => {
-        const block = c.closest('.dp-month-block');
-        if (!block) return;
-        const bYear  = parseInt(block.dataset.year);
-        const bMonth = parseInt(block.dataset.month);
-        const [sYear, sMonth, sDay] = dateStr.split('-').map(Number);
-        if (bYear === sYear && bMonth === sMonth - 1 && parseInt(c.textContent) === sDay && !c.classList.contains('dp-empty')) {
-          c.classList.add('dp-selected');
-        }
-      });
+
+  if (isMobile()) {
+    // Мобільний — шукаємо по mob-col
+    const cols = wrapper.querySelectorAll('.mob-col');
+    for (const col of cols) {
+      const dateEl = col.querySelector('[data-date="' + dateStr + '"]');
+      if (dateEl) {
+        wrapper.scrollTo({ left: col.offsetLeft, behavior: 'smooth' });
+        // Підсвічуємо в day picker
+        document.querySelectorAll('.dp-cell.dp-selected').forEach(c => c.classList.remove('dp-selected'));
+        const allCells = document.querySelectorAll('.dp-month-block .dp-cell');
+        allCells.forEach(c => {
+          const block = c.closest('.dp-month-block');
+          if (!block) return;
+          const bYear  = parseInt(block.dataset.year);
+          const bMonth = parseInt(block.dataset.month);
+          const [sYear, sMonth, sDay] = dateStr.split('-').map(Number);
+          if (bYear === sYear && bMonth === sMonth - 1 && parseInt(c.textContent) === sDay && !c.classList.contains('dp-empty')) {
+            c.classList.add('dp-selected');
+          }
+        });
+        return;
+      }
+    }
+  } else {
+    // Десктоп — знаходимо місяць і день по індексу
+    const [sYear, sMonth, sDay] = dateStr.split('-').map(Number);
+    const targetBlock = wrapper.querySelector(`.month-block[data-year="${sYear}"][data-month="${sMonth - 1}"]`);
+    if (targetBlock) {
+      const colCount = new Date(sYear, sMonth, 0).getDate();
+      const colW = targetBlock.offsetWidth / colCount;
+      const scrollTo = targetBlock.offsetLeft + (sDay - 1) * colW - wrapper.clientWidth / 2 + colW / 2;
+      wrapper.scrollTo({ left: Math.max(0, scrollTo), behavior: 'smooth' });
       return;
     }
   }
+
   const [y, m] = dateStr.split('-').map(Number);
   navigateToMonth(y, m - 1, dateStr);
 }
@@ -1022,17 +1255,27 @@ function dpNavigate(dir) {
 
 function navigateToMonth(year, month, targetDate) {
   const wrapper = document.getElementById('wrapper');
-  // Не очищаємо wrapper — просто додаємо місяць якщо його немає
-  const existing = wrapper.querySelector(`.mob-month[data-year="${year}"][data-month="${month}"]`);
-  if (existing) {
-    setTimeout(() => scrollToDate(targetDate), 50);
-    return;
-  }
-  const block = buildMobileMonth(year, month);
-  if (block) {
-    wrapper.appendChild(block);
-    updateTitle();
-    setTimeout(() => scrollToDate(targetDate), 80);
+
+  if (isMobile()) {
+    // Мобільний — шукаємо mob-month
+    const existing = wrapper.querySelector(`.mob-month[data-year="${year}"][data-month="${month}"]`);
+    if (existing) { setTimeout(() => scrollToDate(targetDate), 50); return; }
+    const block = buildMobileMonth(year, month);
+    if (block) { wrapper.appendChild(block); updateTitle(); setTimeout(() => scrollToDate(targetDate), 80); }
+  } else {
+    // Десктоп — шукаємо month-block
+    const existing = wrapper.querySelector(`.month-block[data-year="${year}"][data-month="${month}"]`);
+    if (existing) { setTimeout(() => scrollToDate(targetDate), 50); return; }
+    // Додаємо роздільник і блок
+    const sep = buildSeparator(year, month);
+    wrapper.appendChild(sep);
+    const block = buildMonthBlock(year, month);
+    if (block) {
+      loadedMonths.push({ year, month });
+      wrapper.appendChild(block);
+      updateTitle();
+      setTimeout(() => scrollToDate(targetDate), 80);
+    }
   }
 }
 
